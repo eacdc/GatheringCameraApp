@@ -241,13 +241,14 @@ def process_image(image):
             state["last_updated"] = now_str
         return False, "Failed to load image."
 
-    # Hand / finger detection – skip if hand is present
-    if has_hand_like_region(image):
-        with state_lock:
-            state["last_status"] = "NO_PAPER"
-            state["last_error"] = "Hand detected, skipping this frame."
-            state["last_updated"] = now_str
-        return False, "Hand detected in image."
+    # Hand / finger detection – disabled for now due to false positives
+    # Uncomment below if you want to re-enable hand detection
+    # if has_hand_like_region(image):
+    #     with state_lock:
+    #         state["last_status"] = "NO_PAPER"
+    #         state["last_error"] = "Hand detected, skipping this frame."
+    #         state["last_updated"] = now_str
+    #     return False, "Hand detected in image."
 
     paper = find_paper_and_warp(image)
     if paper is None:
@@ -373,23 +374,40 @@ def upload_image():
     Accepts multipart/form-data with 'image' field.
     """
     if 'image' not in request.files:
-        return jsonify({"error": "No image file provided"}), 400
+        return jsonify({"success": False, "error": "No image file provided"}), 400
 
     file = request.files['image']
     if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
+        return jsonify({"success": False, "error": "No file selected"}), 400
 
     try:
         # Save uploaded file
         filename = secure_filename(file.filename)
+        if not filename:
+            return jsonify({"success": False, "error": "Invalid filename"}), 400
+            
         timestamp = int(time.time())
         upload_path = UPLOAD_FOLDER / f"{timestamp}_{filename}"
+        UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
         file.save(str(upload_path))
 
         # Load and process image
         image = cv2.imread(str(upload_path))
+        if image is None:
+            return jsonify({
+                "success": False,
+                "error": "Failed to load image. Please ensure the file is a valid image format (jpg, png, etc.)"
+            }), 400
+
         success, message = process_image(image)
 
+        # Get the processed image URL after processing
+        with state_lock:
+            image_timestamp = state.get("image_timestamp")
+            image_url = url_for('static', filename='latest_paper.jpg')
+            if image_timestamp:
+                image_url += f"?t={image_timestamp}"
+        
         if success:
             with state_lock:
                 return jsonify({
@@ -397,16 +415,30 @@ def upload_image():
                     "message": message,
                     "text": state.get("last_text", ""),
                     "status": state.get("last_status", ""),
-                    "score": state.get("last_score")
+                    "score": state.get("last_score"),
+                    "image_url": image_url
                 })
         else:
-            return jsonify({
-                "success": False,
-                "message": message
-            }), 400
+            # Return 200 with success=False so frontend can display the message
+            with state_lock:
+                return jsonify({
+                    "success": False,
+                    "message": message,
+                    "error": message,
+                    "text": state.get("last_text", ""),
+                    "status": state.get("last_status", ""),
+                    "score": state.get("last_score"),
+                    "image_url": image_url if image_timestamp else None
+                }), 200
 
     except Exception as e:
-        return jsonify({"error": f"Processing error: {str(e)}"}), 500
+        import traceback
+        error_trace = traceback.format_exc()
+        return jsonify({
+            "success": False,
+            "error": f"Processing error: {str(e)}",
+            "details": error_trace if app.debug else None
+        }), 500
 
 
 # ================== INITIALIZATION ==================

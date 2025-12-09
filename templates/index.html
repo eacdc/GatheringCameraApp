@@ -119,6 +119,27 @@
     <script>
         // Wait for DOM to be fully loaded before accessing elements
         document.addEventListener('DOMContentLoaded', function() {
+            // Handle image preview when file is selected
+            const imageInput = document.getElementById('imageInput');
+            const imagePreview = document.getElementById('imagePreview');
+            const previewImg = document.getElementById('previewImg');
+            
+            if (imageInput && imagePreview && previewImg) {
+                imageInput.addEventListener('change', function(e) {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            previewImg.src = e.target.result;
+                            imagePreview.style.display = 'block';
+                        };
+                        reader.readAsDataURL(file);
+                    } else {
+                        imagePreview.style.display = 'none';
+                    }
+                });
+            }
+            
             // Handle image upload
             const uploadForm = document.getElementById('uploadForm');
             if (uploadForm) {
@@ -161,13 +182,15 @@
                                 window.location.reload();
                             }, 1000);
                         } else {
+                            // Show error/warning message but still refresh to show updated state
+                            const errorMsg = data.message || data.error || 'Unknown error occurred';
                             if (statusDiv) {
-                                statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + (data.message || data.error) + '</span>';
+                                statusDiv.innerHTML = '<span style="color: #c0392b;">Warning: ' + errorMsg + '</span>';
                             }
-                            if (uploadBtn) {
-                                uploadBtn.disabled = false;
-                                uploadBtn.textContent = 'Process Image';
-                            }
+                            // Still refresh after a delay to show the processed state
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 2000);
                         }
                     } catch (error) {
                         if (statusDiv) {
@@ -251,6 +274,9 @@
                 <h2>Upload Image</h2>
                 <form id="uploadForm" enctype="multipart/form-data">
                     <input type="file" name="image" accept="image/*" id="imageInput" style="margin-bottom: 8px; width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 6px;">
+                    <div id="imagePreview" style="margin-top: 8px; margin-bottom: 8px; display: none;">
+                        <img id="previewImg" src="" alt="Preview" style="max-width: 100%; border-radius: 6px; border: 1px solid #ddd;">
+                    </div>
                     <button type="submit" id="uploadBtn">Process Image</button>
                 </form>
                 <div id="uploadStatus" style="margin-top: 8px; font-size: 13px;"></div>
