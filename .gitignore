@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Flask
+instance/
+.webassets-cache
+
+# Static files (uploads)
+static/uploads/*
+static/test_uploads/*
+static/test_processed/*
+!static/uploads/.gitkeep
+!static/test_uploads/.gitkeep
+!static/test_processed/.gitkeep
+
+# Latest processed image (regenerated on each run)
+static/latest_paper.jpg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Master text (optional - you may want to commit this)
+# master_text.txt
+

@@ -1,23 +1,25 @@
 import time
 import threading
+import os
 from datetime import datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
 import pytesseract
-from flask import Flask, render_template, request, redirect, url_for
-from picamera2 import Picamera2
+from flask import Flask, render_template, request, redirect, url_for, jsonify
+from werkzeug.utils import secure_filename
 from rapidfuzz import fuzz
 
 # ================== CONFIG ==================
-CAPTURE_INTERVAL_SEC = 60        # capture every 60 seconds
-FRAMES_PER_CYCLE = 4             # capture N frames, pick sharpest
 DEFAULT_TOLERANCE = 80           # % similarity match
 LANGS = "eng"                    # English only for now
 
 MASTER_TEXT_FILE = Path("master_text.txt")
 LATEST_IMAGE_PATH = Path("static/latest_paper.jpg")
+UPLOAD_FOLDER = Path("static/uploads")
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+Path("static").mkdir(parents=True, exist_ok=True)
 
 # Quality / filtering settings
 MIN_OCR_CONFIDENCE = 50          # minimum average OCR confidence to accept
@@ -26,7 +28,7 @@ MIN_OCR_TEXT_LEN = 30            # minimum characters of OCR text to accept
 SKIN_RATIO_THRESHOLD = 0.02      # >2% skin-like pixels => assume hand present
 MISMATCH_STREAK_THRESHOLD = 3    # require 3 consecutive mismatches before going RED
 
-# If needed, explicitly set Tesseract path (usually not needed on Pi OS):
+# Tesseract path for Render (usually /usr/bin/tesseract on Linux)
 # pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 
 
@@ -45,21 +47,14 @@ state = {
 state_lock = threading.Lock()
 
 
-# ================== CAMERA (PICAMERA2) ==================
-picam2 = Picamera2()
-camera_config = picam2.create_still_configuration(main={"size": (1920, 1080)})
-picam2.configure(camera_config)
-picam2.start()
-
-
-def capture_frame():
+# ================== IMAGE PROCESSING ==================
+def process_uploaded_image(image_path):
     """
-    Capture one frame from Pi Camera v3 via Picamera2.
-    Returns a BGR image (OpenCV format).
+    Process an uploaded image file.
+    Returns a BGR image (OpenCV format) or None if failed.
     """
-    rgb = picam2.capture_array()               # RGB image
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR) # convert to BGR
-    return bgr
+    img = cv2.imread(str(image_path))
+    return img
 
 
 # ================== IMAGE / OCR UTILITIES ==================
@@ -231,119 +226,99 @@ def save_master_text(text):
     MASTER_TEXT_FILE.write_text(text, encoding="utf-8")
 
 
-# ================== BACKGROUND CAPTURE / OCR LOOP ==================
-def capture_loop():
-    with state_lock:
-        state["master_text"] = load_master_text()
+# ================== IMAGE PROCESSING FUNCTION ==================
+def process_image(image):
+    """
+    Process an image: detect paper, run OCR, and update state.
+    Returns (success, error_message)
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    if image is None:
+        with state_lock:
+            state["last_status"] = "ERROR"
+            state["last_error"] = "Failed to load image."
+            state["last_updated"] = now_str
+        return False, "Failed to load image."
+
+    # Hand / finger detection – skip if hand is present
+    if has_hand_like_region(image):
+        with state_lock:
+            state["last_status"] = "NO_PAPER"
+            state["last_error"] = "Hand detected, skipping this frame."
+            state["last_updated"] = now_str
+        return False, "Hand detected in image."
+
+    paper = find_paper_and_warp(image)
+    if paper is None:
+        # If paper detection fails, use the full image
+        paper = image.copy()
+        with state_lock:
+            state["last_status"] = "NO_PAPER"
+            state["last_error"] = "Paper not detected, using full image for OCR."
+            state["last_updated"] = now_str
+
+    # Save latest paper image for UI
+    LATEST_IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(LATEST_IMAGE_PATH), paper)
+
+    # OCR with confidence
     try:
-        while True:
-            sharpest_image = None
-            best_sharpness = -1
+        text, avg_conf = ocr_with_confidence(paper)
+    except Exception as e:
+        with state_lock:
+            state["last_status"] = "ERROR"
+            state["last_error"] = f"OCR error: {e}"
+            state["last_updated"] = now_str
+        return False, f"OCR error: {e}"
 
-            # Capture multiple frames and pick the sharpest
-            for _ in range(FRAMES_PER_CYCLE):
-                frame = capture_frame()
-                sharpness = measure_sharpness(frame)
-                if sharpness > best_sharpness:
-                    best_sharpness = sharpness
-                    sharpest_image = frame
-                time.sleep(0.2)
+    # Quality gate: skip very low confidence or too-short text
+    if avg_conf < MIN_OCR_CONFIDENCE or len(text) < MIN_OCR_TEXT_LEN:
+        with state_lock:
+            state["last_status"] = "NO_PAPER"
+            state["last_error"] = (
+                f"OCR low confidence ({avg_conf:.1f}) or text too short "
+                f"({len(text)} chars)."
+            )
+            state["last_updated"] = now_str
+        return False, f"OCR quality too low (confidence: {avg_conf:.1f}, length: {len(text)})"
 
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # At this point, we have good OCR; update and compare
+    with state_lock:
+        state["last_text"] = text
+        state["last_updated"] = now_str
+        state["image_timestamp"] = int(time.time())
 
-            if sharpest_image is None:
-                with state_lock:
-                    state["last_status"] = "ERROR"
-                    state["last_error"] = "Failed to capture any frame."
-                    state["last_updated"] = now_str
-                time.sleep(CAPTURE_INTERVAL_SEC)
-                continue
+        master = state["master_text"]
+        tolerance = state["tolerance"]
 
-            # Hand / finger detection – skip this cycle if hand is present
-            if has_hand_like_region(sharpest_image):
-                with state_lock:
-                    state["last_status"] = "NO_PAPER"
-                    state["last_error"] = "Hand detected, skipping this frame."
-                    state["last_updated"] = now_str
-                time.sleep(CAPTURE_INTERVAL_SEC)
-                continue
+        if not master:
+            state["last_status"] = "NO_MASTER"
+            state["last_score"] = None
+            state["last_error"] = "Master text not set."
+        else:
+            score = compare_text(master, text)
+            state["last_score"] = score
 
-            paper = find_paper_and_warp(sharpest_image)
-            if paper is None:
-                with state_lock:
-                    state["last_status"] = "NO_PAPER"
-                    state["last_error"] = "Paper not detected or shape not plausible."
-                    state["last_updated"] = now_str
-                time.sleep(CAPTURE_INTERVAL_SEC)
-                continue
-
-            # Save latest paper image for UI
-            LATEST_IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(LATEST_IMAGE_PATH), paper)
-
-            # OCR with confidence
-            try:
-                text, avg_conf = ocr_with_confidence(paper)
-            except Exception as e:
-                with state_lock:
-                    state["last_status"] = "ERROR"
-                    state["last_error"] = f"OCR error: {e}"
-                    state["last_updated"] = now_str
-                time.sleep(CAPTURE_INTERVAL_SEC)
-                continue
-
-            # Quality gate: skip very low confidence or too-short text
-            if avg_conf < MIN_OCR_CONFIDENCE or len(text) < MIN_OCR_TEXT_LEN:
-                with state_lock:
+            if score >= tolerance:
+                state["mismatch_streak"] = 0
+                state["last_status"] = "OK"
+                state["last_error"] = ""
+            else:
+                state["mismatch_streak"] += 1
+                if state["mismatch_streak"] >= MISMATCH_STREAK_THRESHOLD:
+                    state["last_status"] = "MISMATCH"
+                    state["last_error"] = ""
+                else:
+                    # Treat as temporary mismatch; don't go RED yet
                     state["last_status"] = "NO_PAPER"
                     state["last_error"] = (
-                        f"OCR low confidence ({avg_conf:.1f}) or text too short "
-                        f"({len(text)} chars), skipping this cycle."
+                        "Temporary mismatch, waiting for confirmation "
+                        f"({state['mismatch_streak']}/"
+                        f"{MISMATCH_STREAK_THRESHOLD})."
                     )
-                    state["last_updated"] = now_str
-                time.sleep(CAPTURE_INTERVAL_SEC)
-                continue
 
-            # At this point, we have good OCR; update and compare
-            with state_lock:
-                state["last_text"] = text
-                state["last_updated"] = now_str
-                state["image_timestamp"] = int(time.time())
-
-                master = state["master_text"]
-                tolerance = state["tolerance"]
-
-                if not master:
-                    state["last_status"] = "NO_MASTER"
-                    state["last_score"] = None
-                    state["last_error"] = "Master text not set."
-                else:
-                    score = compare_text(master, text)
-                    state["last_score"] = score
-
-                    if score >= tolerance:
-                        state["mismatch_streak"] = 0
-                        state["last_status"] = "OK"
-                        state["last_error"] = ""
-                    else:
-                        state["mismatch_streak"] += 1
-                        if state["mismatch_streak"] >= MISMATCH_STREAK_THRESHOLD:
-                            state["last_status"] = "MISMATCH"
-                            state["last_error"] = ""
-                        else:
-                            # Treat as temporary mismatch; don't go RED yet
-                            state["last_status"] = "NO_PAPER"
-                            state["last_error"] = (
-                                "Temporary mismatch, waiting for confirmation "
-                                f"({state['mismatch_streak']}/"
-                                f"{MISMATCH_STREAK_THRESHOLD})."
-                            )
-
-            time.sleep(CAPTURE_INTERVAL_SEC)
-
-    finally:
-        picam2.stop()
+    return True, "Image processed successfully."
 
 
 # ================== FLASK APP ==================
@@ -391,9 +366,64 @@ def update_tolerance():
     return redirect(url_for("index"))
 
 
+@app.route("/upload", methods=["POST"])
+def upload_image():
+    """
+    Upload and process an image.
+    Accepts multipart/form-data with 'image' field.
+    """
+    if 'image' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
+
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+
+    try:
+        # Save uploaded file
+        filename = secure_filename(file.filename)
+        timestamp = int(time.time())
+        upload_path = UPLOAD_FOLDER / f"{timestamp}_{filename}"
+        file.save(str(upload_path))
+
+        # Load and process image
+        image = cv2.imread(str(upload_path))
+        success, message = process_image(image)
+
+        if success:
+            with state_lock:
+                return jsonify({
+                    "success": True,
+                    "message": message,
+                    "text": state.get("last_text", ""),
+                    "status": state.get("last_status", ""),
+                    "score": state.get("last_score")
+                })
+        else:
+            return jsonify({
+                "success": False,
+                "message": message
+            }), 400
+
+    except Exception as e:
+        return jsonify({"error": f"Processing error: {str(e)}"}), 500
+
+
+# ================== INITIALIZATION ==================
+def initialize_app():
+    """Initialize the app state."""
+    with state_lock:
+        state["master_text"] = load_master_text()
+        if state["last_status"] == "INIT":
+            state["last_status"] = "NO_MASTER"
+            state["last_error"] = "Upload an image to begin processing."
+
+
 # ================== ENTRY POINT ==================
 if __name__ == "__main__":
-    worker = threading.Thread(target=capture_loop, daemon=True)
-    worker.start()
-
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    initialize_app()
+    
+    # Get port from environment variable (Render sets this) or default to 5000
+    port = int(os.environ.get("PORT", 5000))
+    
+    app.run(host="0.0.0.0", port=port, debug=False)

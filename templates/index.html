@@ -117,18 +117,58 @@
         }
     </style>
     <script>
-        // Auto-refresh every 10 seconds to show latest OCR and status
+        // Handle image upload
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData();
+            const fileInput = document.getElementById('imageInput');
+            const uploadBtn = document.getElementById('uploadBtn');
+            const statusDiv = document.getElementById('uploadStatus');
+            
+            if (!fileInput.files[0]) {
+                statusDiv.innerHTML = '<span style="color: #c0392b;">Please select an image file.</span>';
+                return;
+            }
+            
+            formData.append('image', fileInput.files[0]);
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Processing...';
+            statusDiv.innerHTML = '<span style="color: #1a4b82;">Uploading and processing image...</span>';
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.innerHTML = '<span style="color: #146c2e;">✓ Image processed successfully! Refreshing...</span>';
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + (data.message || data.error) + '</span>';
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = 'Process Image';
+                }
+            } catch (error) {
+                statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + error.message + '</span>';
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Process Image';
+            }
+        });
+        
+        // Optional: Auto-refresh every 30 seconds to show latest status (if image was processed elsewhere)
         setInterval(function () {
             window.location.reload();
-        }, 10000);
+        }, 30000);
     </script>
 </head>
 <body>
 <div class="container">
-    <h1>
-        Print Signature Checker
-        <a href="{{ url_for('test_page') }}" style="font-size: 14px; color: #1f6feb; text-decoration: none; font-weight: normal; margin-left: 20px;">Test Page →</a>
-    </h1>
+    <h1>Print Signature Checker</h1>
 
     <div class="status {{ last_status }}">
         Status: {{ last_status }}
@@ -186,12 +226,21 @@
         <!-- RIGHT COLUMN: IMAGE + SETTINGS -->
         <div>
             <div class="card">
-                <h2>Latest Captured Paper</h2>
+                <h2>Upload Image</h2>
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <input type="file" name="image" accept="image/*" id="imageInput" style="margin-bottom: 8px; width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 6px;">
+                    <button type="submit" id="uploadBtn">Process Image</button>
+                </form>
+                <div id="uploadStatus" style="margin-top: 8px; font-size: 13px;"></div>
+            </div>
+
+            <div class="card" style="margin-top: 10px;">
+                <h2>Latest Processed Paper</h2>
                 <div class="image-wrapper">
                     {% if image_timestamp %}
                         <img src="{{ url_for('static', filename='latest_paper.jpg') }}?t={{ image_timestamp }}" alt="Latest paper image">
                     {% else %}
-                        <div class="meta">No paper image captured yet.</div>
+                        <div class="meta">No paper image processed yet. Upload an image above.</div>
                     {% endif %}
                 </div>
             </div>
@@ -209,8 +258,8 @@
                 </form>
 
                 <div class="meta" style="margin-top:10px;">
-                    The system captures images every 60 seconds, runs OCR, and compares with the master text.
-                    Temporary issues (hands, low OCR confidence, or brief mismatches) are ignored until they repeat.
+                    Upload an image to process. The system runs OCR and compares with the master text.
+                    Temporary issues (hands, low OCR confidence, or brief mismatches) are handled gracefully.
                 </div>
             </div>
         </div>
