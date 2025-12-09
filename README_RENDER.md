@@ -27,27 +27,12 @@ git push origin main
 2. Click **"New +"** → **"Web Service"**
 3. Connect your GitHub account if not already connected
 4. Select your repository
-5. Configure the service:
-   - **Name**: `gathering-camera-app` (or your preferred name)
-   - **Environment**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn app:app --bind 0.0.0.0:$PORT`
-6. Click **"Create Web Service"**
+5. Render will automatically detect the `Dockerfile` and `render.yaml`:
+   - **Dockerfile**: Installs Tesseract OCR and Python dependencies
+   - **render.yaml**: Configures the service settings
+6. Click **"Create Web Service"** (or Render will auto-configure from `render.yaml`)
 
-### 3. Install Tesseract OCR
-
-Render uses Ubuntu-based containers. Add this to your build command to install Tesseract:
-
-**Option A: In Render Dashboard**
-- Go to your service settings
-- Update **Build Command** to:
-  ```
-  apt-get update && apt-get install -y tesseract-ocr && pip install -r requirements.txt
-  ```
-
-**Option B: Using render.yaml** (already configured)
-- The `render.yaml` file includes the build command
-- Render will automatically use it if present
+**Note**: The deployment uses Docker to install Tesseract OCR, which is required because Render's build environment doesn't allow `apt-get` commands directly.
 
 ### 4. Environment Variables
 
@@ -71,7 +56,8 @@ Once deployed:
 .
 ├── app.py              # Main Flask application (Render-compatible)
 ├── requirements.txt    # Python dependencies
-├── Procfile            # Process file for Render
+├── Dockerfile          # Docker configuration with Tesseract OCR
+├── Procfile            # Process file for Render (optional)
 ├── render.yaml         # Render configuration
 ├── templates/
 │   └── index.html      # Web interface with upload feature
@@ -90,8 +76,9 @@ Once deployed:
 ## Troubleshooting
 
 ### Tesseract not found
-- Make sure the build command includes `apt-get install -y tesseract-ocr`
-- Check Render logs for installation errors
+- The Dockerfile automatically installs Tesseract OCR
+- If you see Tesseract errors, check that the Dockerfile is being used
+- Verify in Render logs that the Docker build completed successfully
 
 ### Upload fails
 - Check file size limits (Render free tier has limits)
