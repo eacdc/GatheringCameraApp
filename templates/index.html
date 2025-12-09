@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Print Signature Checker</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 20px 24px 32px;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+        }
+        h1 {
+            margin-top: 0;
+        }
+        .status {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+        .status.OK { background: #e3f6e8; color: #146c2e; }
+        .status.MISMATCH { background: #ffe5e5; color: #c0392b; }
+        .status.NO_MASTER { background: #fff4d6; color: #8a6d1f; }
+        .status.NO_PAPER { background: #e8f0fe; color: #1a4b82; }
+        .status.ERROR { background: #ffe5e5; color: #c0392b; }
+        .status.INIT { background: #e8f0fe; color: #1a4b82; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: #fafafa;
+            border-radius: 8px;
+            padding: 14px 16px;
+            border: 1px solid #e0e0e0;
+        }
+        .card h2 {
+            margin-top: 0;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 280px;
+            overflow-y: auto;
+            background: #ffffff;
+            border-radius: 6px;
+            padding: 10px;
+            border: 1px solid #eee;
+            font-size: 13px;
+        }
+        .label {
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 4px;
+        }
+        .value {
+            font-weight: 600;
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+        .image-wrapper {
+            text-align: center;
+        }
+        .image-wrapper img {
+            max-width: 100%;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        form {
+            margin-top: 8px;
+        }
+        input[type="number"],
+        textarea {
+            width: 100%;
+            padding: 6px 8px;
+            font-size: 14px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+        }
+        button {
+            margin-top: 6px;
+            padding: 8px 14px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            background: #1f6feb;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        button.secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        .meta {
+            font-size: 12px;
+            color: #777;
+            margin-top: 4px;
+        }
+    </style>
+    <script>
+        // Auto-refresh every 10 seconds to show latest OCR and status
+        setInterval(function () {
+            window.location.reload();
+        }, 10000);
+    </script>
+</head>
+<body>
+<div class="container">
+    <h1>
+        Print Signature Checker
+        <a href="{{ url_for('test_page') }}" style="font-size: 14px; color: #1f6feb; text-decoration: none; font-weight: normal; margin-left: 20px;">Test Page →</a>
+    </h1>
+
+    <div class="status {{ last_status }}">
+        Status: {{ last_status }}
+        {% if last_score is not none %}
+            &nbsp;|&nbsp; Similarity: {{ "%.1f" % last_score }} %
+        {% endif %}
+        {% if last_updated %}
+            &nbsp;|&nbsp; Last update: {{ last_updated }}
+        {% endif %}
+    </div>
+
+    {% if last_error %}
+    <div class="meta">
+        Note: {{ last_error }}
+    </div>
+    {% endif %}
+
+    <div class="grid">
+        <!-- LEFT COLUMN: TEXT -->
+        <div>
+            <div class="card">
+                <h2>Current OCR Text</h2>
+                {% if last_text %}
+                    <pre>{{ last_text }}</pre>
+                {% else %}
+                    <div class="meta">No OCR text captured yet.</div>
+                {% endif %}
+            </div>
+
+            <div class="card" style="margin-top: 10px;">
+                <h2>Master Text</h2>
+                {% if master_text %}
+                    <pre>{{ master_text }}</pre>
+                {% else %}
+                    <div class="meta">Master text is not set.</div>
+                {% endif %}
+
+                <!-- Set master from current OCR -->
+                <form method="post" action="{{ url_for('set_master') }}">
+                    <input type="hidden" name="source" value="last">
+                    <button type="submit">Set master from current OCR</button>
+                </form>
+
+                <div class="meta" style="margin-top:8px;">or paste manually:</div>
+
+                <!-- Set master from manual text -->
+                <form method="post" action="{{ url_for('set_master') }}">
+                    <input type="hidden" name="source" value="manual">
+                    <textarea name="master_text" rows="4" placeholder="Paste master text here..."></textarea>
+                    <button type="submit">Set master from text above</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- RIGHT COLUMN: IMAGE + SETTINGS -->
+        <div>
+            <div class="card">
+                <h2>Latest Captured Paper</h2>
+                <div class="image-wrapper">
+                    {% if image_timestamp %}
+                        <img src="{{ url_for('static', filename='latest_paper.jpg') }}?t={{ image_timestamp }}" alt="Latest paper image">
+                    {% else %}
+                        <div class="meta">No paper image captured yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 10px;">
+                <h2>Settings</h2>
+                <div class="metric-row">
+                    <span class="label">Similarity tolerance:</span>
+                    <span class="value">{{ tolerance }} %</span>
+                </div>
+                <form method="post" action="{{ url_for('update_tolerance') }}">
+                    <div class="label" style="margin-top:8px;">Update tolerance (0–100):</div>
+                    <input type="number" name="tolerance" min="0" max="100" value="{{ tolerance }}">
+                    <button type="submit">Save tolerance</button>
+                </form>
+
+                <div class="meta" style="margin-top:10px;">
+                    The system captures images every 60 seconds, runs OCR, and compares with the master text.
+                    Temporary issues (hands, low OCR confidence, or brief mismatches) are ignored until they repeat.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
