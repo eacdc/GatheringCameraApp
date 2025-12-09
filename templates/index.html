@@ -117,53 +117,75 @@
         }
     </style>
     <script>
-        // Handle image upload
-        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            const formData = new FormData();
-            const fileInput = document.getElementById('imageInput');
-            const uploadBtn = document.getElementById('uploadBtn');
-            const statusDiv = document.getElementById('uploadStatus');
-            
-            if (!fileInput.files[0]) {
-                statusDiv.innerHTML = '<span style="color: #c0392b;">Please select an image file.</span>';
-                return;
-            }
-            
-            formData.append('image', fileInput.files[0]);
-            uploadBtn.disabled = true;
-            uploadBtn.textContent = 'Processing...';
-            statusDiv.innerHTML = '<span style="color: #1a4b82;">Uploading and processing image...</span>';
-            
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
+        // Wait for DOM to be fully loaded before accessing elements
+        document.addEventListener('DOMContentLoaded', function() {
+            // Handle image upload
+            const uploadForm = document.getElementById('uploadForm');
+            if (uploadForm) {
+                uploadForm.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    const formData = new FormData();
+                    const fileInput = document.getElementById('imageInput');
+                    const uploadBtn = document.getElementById('uploadBtn');
+                    const statusDiv = document.getElementById('uploadStatus');
+                    
+                    if (!fileInput || !fileInput.files[0]) {
+                        if (statusDiv) {
+                            statusDiv.innerHTML = '<span style="color: #c0392b;">Please select an image file.</span>';
+                        }
+                        return;
+                    }
+                    
+                    formData.append('image', fileInput.files[0]);
+                    if (uploadBtn) {
+                        uploadBtn.disabled = true;
+                        uploadBtn.textContent = 'Processing...';
+                    }
+                    if (statusDiv) {
+                        statusDiv.innerHTML = '<span style="color: #1a4b82;">Uploading and processing image...</span>';
+                    }
+                    
+                    try {
+                        const response = await fetch('/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            if (statusDiv) {
+                                statusDiv.innerHTML = '<span style="color: #146c2e;">✓ Image processed successfully! Refreshing...</span>';
+                            }
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 1000);
+                        } else {
+                            if (statusDiv) {
+                                statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + (data.message || data.error) + '</span>';
+                            }
+                            if (uploadBtn) {
+                                uploadBtn.disabled = false;
+                                uploadBtn.textContent = 'Process Image';
+                            }
+                        }
+                    } catch (error) {
+                        if (statusDiv) {
+                            statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + error.message + '</span>';
+                        }
+                        if (uploadBtn) {
+                            uploadBtn.disabled = false;
+                            uploadBtn.textContent = 'Process Image';
+                        }
+                    }
                 });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    statusDiv.innerHTML = '<span style="color: #146c2e;">✓ Image processed successfully! Refreshing...</span>';
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
-                } else {
-                    statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + (data.message || data.error) + '</span>';
-                    uploadBtn.disabled = false;
-                    uploadBtn.textContent = 'Process Image';
-                }
-            } catch (error) {
-                statusDiv.innerHTML = '<span style="color: #c0392b;">Error: ' + error.message + '</span>';
-                uploadBtn.disabled = false;
-                uploadBtn.textContent = 'Process Image';
             }
+            
+            // Optional: Auto-refresh every 30 seconds to show latest status (if image was processed elsewhere)
+            setInterval(function () {
+                window.location.reload();
+            }, 30000);
         });
-        
-        // Optional: Auto-refresh every 30 seconds to show latest status (if image was processed elsewhere)
-        setInterval(function () {
-            window.location.reload();
-        }, 30000);
     </script>
 </head>
 <body>
