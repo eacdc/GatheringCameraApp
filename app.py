@@ -107,8 +107,18 @@ def find_paper_and_warp(image):
     Detect the largest 4-sided contour (paper) and apply perspective warp.
     Returns cropped paper image or None if not found / not plausible.
     """
-    orig = image.copy()
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Resize very large images for faster processing (paper detection doesn't need full resolution)
+    height, width = image.shape[:2]
+    if max(height, width) > 2000:
+        scale = 2000 / max(height, width)
+        small_image = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA)
+        orig_scale = scale
+    else:
+        small_image = image
+        orig_scale = 1.0
+    
+    orig = image.copy()  # Keep original for final warp
+    gray = cv2.cvtColor(small_image, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, 50, 150)
 
@@ -130,6 +140,10 @@ def find_paper_and_warp(image):
         return None
 
     pts = paper_contour.reshape(4, 2)
+    # Scale coordinates back to original image size if we resized
+    if orig_scale != 1.0:
+        pts = pts / orig_scale
+    
     rect = order_points(pts)
 
     if not is_paper_plausible(rect):
@@ -181,25 +195,68 @@ def has_hand_like_region(image):
     return ratio > SKIN_RATIO_THRESHOLD
 
 
+def resize_image_for_ocr(image, max_dimension=2000):
+    """
+    Resize image to a maximum dimension while maintaining aspect ratio.
+    This prevents memory issues and timeouts with very large images.
+    """
+    height, width = image.shape[:2]
+    max_size = max(height, width)
+    
+    if max_size <= max_dimension:
+        return image
+    
+    scale = max_dimension / max_size
+    new_width = int(width * scale)
+    new_height = int(height * scale)
+    
+    return cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+
+
 def ocr_with_confidence(image):
     """
     Run Tesseract OCR and return (text, avg_confidence).
+    Optimized for performance and memory usage.
     """
+    # Resize large images to prevent timeouts (max 2000px on longest side)
+    image = resize_image_for_ocr(image, max_dimension=2000)
+    
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Upscale to improve OCR for smaller text
-    scale = 1.5
-    gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    # Only upscale if image is small (to improve OCR for small text)
+    height, width = gray.shape
+    if max(height, width) < 1000:
+        scale = 1.5
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    elif max(height, width) > 1500:
+        # Downscale very large images
+        scale = 1500 / max(height, width)
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
     # Binarize
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    data = pytesseract.image_to_data(
-        thresh,
-        lang=LANGS,
-        config="--psm 3",
-        output_type=pytesseract.Output.DICT,
-    )
+    # Add timeout to prevent hanging (30 seconds)
+    try:
+        data = pytesseract.image_to_data(
+            thresh,
+            lang=LANGS,
+            config="--psm 3",
+            output_type=pytesseract.Output.DICT,
+            timeout=30,
+        )
+    except Exception as e:
+        # If timeout or other error, try with simpler config
+        try:
+            data = pytesseract.image_to_data(
+                thresh,
+                lang=LANGS,
+                config="--psm 6",  # Uniform block of text (faster)
+                output_type=pytesseract.Output.DICT,
+                timeout=20,
+            )
+        except Exception as e2:
+            raise Exception(f"OCR failed: {str(e2)}")
 
     words = [w for w in data["text"] if w.strip()]
     text = " ".join(words)
@@ -398,6 +455,13 @@ def upload_image():
                 "success": False,
                 "error": "Failed to load image. Please ensure the file is a valid image format (jpg, png, etc.)"
             }), 400
+
+        # Check image size and warn if too large
+        height, width = image.shape[:2]
+        if width * height > 10_000_000:  # More than 10MP
+            # Resize very large images before processing
+            max_dim = int((10_000_000 / (width * height)) ** 0.5 * max(width, height))
+            image = resize_image_for_ocr(image, max_dimension=max_dim)
 
         success, message = process_image(image)
 
