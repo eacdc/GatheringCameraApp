@@ -198,13 +198,22 @@ def has_hand_like_region(image):
 def ocr_with_confidence(image):
     """
     Run Tesseract OCR and return (text, avg_confidence).
-    Simplified to match app_windows.py for better performance.
+    Optimized for Render's limited resources.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # Upscale to improve OCR for smaller text (same as app_windows.py)
-    scale = 1.5
-    gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    
+    # First, resize to max 1500px to prevent memory issues on Render
+    height, width = gray.shape
+    max_dim = max(height, width)
+    if max_dim > 1500:
+        scale = 1500 / max_dim
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    
+    # Then upscale only if image is small (to improve OCR for small text)
+    height, width = gray.shape
+    if max(height, width) < 1000:
+        scale = 1.5
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
     # Binarize
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
